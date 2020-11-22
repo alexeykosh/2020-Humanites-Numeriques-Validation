@@ -1,0 +1,389 @@
+---
+title: "DH validation"
+author: "Alexey Koshevoy"
+date: "11/19/2020"
+output:
+  tufte::tufte_html: default
+---
+
+```{r, echo=FALSE, message=FALSE}
+library(dplyr)
+library(ggraph)
+library(igraph)
+library(ggvoronoi)
+library(ggrepel)
+library(viridis)
+library(VGAM)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggrepel)
+library(dendextend)
+library(maps)
+
+
+fr <- map_data("world", region = 'France')
+```
+
+
+# 1. Plots
+
+NB: I did most of the data preparation in Python, therefore you should look for it in this INSERT LINK 
+
+# 1.1. Distributions, long tails, etc.
+
+```{r, echo=FALSE}
+data_m <- read.csv('data_mod.csv')
+coords <-  read.csv('coords.csv')
+```
+
+
+Let's look at the city distribution first: 
+
+```{r,message=FALSE}
+data_m %>% 
+  group_by(Ville) %>%
+  summarize(Count=n()) %>%
+  arrange(Count) %>%
+  filter(Count > 20) %>%
+  ggplot(aes(y=reorder(Ville, Count), x=Count))+
+  geom_bar(stat='identity', aes(fill=Ville))+
+  theme_minimal()+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  scale_color_viridis()+
+  theme(axis.title.y=element_blank(), 
+        legend.position = "none")
+```
+
+As it can be seen from the plot below, small cities tent to have < 20 items, therefore let's stick with the first 13. 
+
+Let's look at all the cities in the database. However, instead of the city's name, I will be plotting the rank of the city relative to the number of items coming from it:
+
+
+
+```{r, message=FALSE}
+data_m %>% 
+  group_by(Ville) %>%
+  summarize(Count=n()) %>%
+  arrange(desc(Count)) %>%
+  mutate(Rank = row_number()) %>%
+  ggplot()+
+  geom_point(aes(x=Rank, y=Count))+
+  theme_minimal()+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  scale_color_viridis()+
+  theme(axis.title.y=element_blank(), 
+        legend.position = "none")+
+  annotate(
+    geom = "curve", x = 99, y = 452, xend = 4, yend = 532, 
+    curvature = .3, arrow = arrow(length = unit(2, "mm"))
+  ) +
+  annotate(geom = "text", x = 101, y = 455, label = "Paris", hjust = "left")
+```
+
+Seems like the number of items are distributed across some power law. Let's try Zipf's law...: 
+
+```{r, warning=FALSE}
+alpha = 1
+
+data_m %>% 
+  group_by(Ville) %>%
+  summarize(Count=n()) %>%
+  arrange(desc(Count)) %>%
+  mutate(Rank = row_number(), 
+         zipfs_freq = ifelse(Rank == 1, Count, dplyr::first(Count) / Rank^alpha)) %>%
+  ggplot()+
+  geom_point(aes(x=log(Rank), y=log(Count)), alpha=0.7)+
+  geom_line(aes(x=log(Rank), y=log(zipfs_freq)), color='#26A96C')+
+  theme_minimal()+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  labs(x='Log Rank', y='Log N of Items')
+```
+
+Indeed, the number of items in each city is distributed according to Zipf's law. For this particular study it means that there is a long tail with similar number of items, which could be potentially ignored. 
+
+
+Needles to say, the exact same thing happens with the object types: 
+
+
+```{r}
+data_m %>% 
+  group_by(Objets.collectionnés) %>%
+  summarize(Count=n()) %>%
+  arrange(desc(Count)) %>%
+  mutate(Rank = row_number()) %>%
+  ggplot()+
+  geom_point(aes(x=Rank, y=Count))+
+  theme_minimal()+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  labs(x='Type Rank')
+```
+
+Once again, there are some 10-15 very frequent type and then a long tail of infrequent ones. Does it follow Zipf's law?
+
+```{r}
+alpha = 1
+
+data_m %>% 
+  group_by(Objets.collectionnés) %>%
+  summarize(Count=n()) %>%
+  arrange(desc(Count)) %>%
+  mutate(Rank = row_number(), 
+         zipfs_freq = ifelse(Rank == 1, Count, dplyr::first(Count) / Rank^alpha)) %>%
+  ggplot()+
+  geom_point(aes(x=log(Rank), y=log(Count)), alpha=0.7)+
+  geom_line(aes(x=log(Rank), y=log(zipfs_freq)), color='#26A96C')+
+  theme_minimal()+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  labs(x='Log Rank of Type', y='Log N of Items')
+```
+
+Not quite, but the notion of a long tail still holds.
+
+Therefore, let's limit ourselves to 13 cities with the biggest numer of items and to 14 most frequent types:
+
+
+
+```{r, results='asis', echo=FALSE}
+knitr::kable(head(data_m))
+```
+
+As you can see from the table above, I modified the dataframe in order to: 
+
+- Only include the 14 most frequent items in the collections ('Type' column)
+- Only include the 13 most frequent cities ('City_subset' column)
+
+
+## 1. 2. Different types of object across the bigest cities: 
+
+Let's look a the cities with most items in the dataset:
+
+```{r, message=FALSE}
+data_m[data_m$Type != 'Other',] %>%
+  group_by(City_subset, Type) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) %>%
+  ggplot(aes(x=reorder(Type, freq), y=freq))+
+  geom_bar(aes(color=Type, fill=Type), stat='Identity', position="dodge")+
+  scale_y_continuous(breaks=c(0.01, 0.2, 0.4), labels=c('1%', '20%', '40%'))+
+  coord_flip()+
+  facet_wrap(~City_subset)+
+  theme_minimal()+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  theme(axis.title.y=element_blank(), 
+        legend.position = "none")+
+  labs(y='Percentage')
+```
+
+In all of the cities above, the most popular items are usually Paintings and Ceramics. And in all of the 'long tail' of cities the cituation seems to be the same overall (see 'Other' bar-plot). 
+
+Let's map the cities with the number of Ceramics in them:
+
+```{r, message=FALSE}
+coordss <- merge(x = data_m, y = coords, by.x = "Ville", by.y='city')
+
+coordss[coordss$Objets.collectionnés == 'Céramique',] %>%
+  group_by(Ville) %>%
+  summarize(Count=n(), Lat=max(Lat), Long=max(Long)) %>%
+  arrange(desc(Count)) %>%
+  filter(Count > 3) %>%
+  ggplot(aes(x=Lat, y=Long))+
+  theme_void()+
+  coord_map()+
+  geom_polygon(data=fr, aes(x = long, y = lat, group=group), fill='#F1DEDC')+
+  geom_point(aes(size=Count), color='red')+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  geom_text_repel(aes(label=Ville))
+```
+
+
+With most paintings?
+
+
+```{r, message=FALSE}
+coordss <- merge(x = data_m, y = coords, by.x = "Ville", by.y='city')
+
+coordss[coordss$Objets.collectionnés == 'Tableaux',] %>%
+  group_by(Ville) %>%
+  summarize(Count=n(), Lat=max(Lat), Long=max(Long)) %>%
+  arrange(desc(Count)) %>%
+  filter(Count > 3) %>%
+  ggplot(aes(x=Lat, y=Long))+
+  coord_map()+
+  theme_void()+
+  geom_polygon(data=fr, aes(x = long, y = lat, group=group), fill='#F1DEDC')+
+  geom_point(aes(size=Count), color='red')+
+  theme(plot.background = element_rect(fill = "#fffff8"))+
+  geom_text_repel(aes(label=Ville))
+```
+
+
+
+# 2. Graphs and polygons
+
+## 2.1. Usefull functions
+
+First of all, let's define a function which will build a graph givent the pairwise distance matrix: 
+
+```{r}
+build_graph <- function(dist_m){
+  distance <- data.frame(distance)
+  is.na(distance) <- sapply(distance, is.infinite)
+  distance[is.na(distance)] <- 0
+  g <- graph.adjacency(data.matrix(distance), mode = "undirected", diag = FALSE, weighted = T) 
+  return(g)
+}
+```
+
+
+Then I will build a function that will take the graph outputted by the previous function and calculate all of the possible metrics on it. 
+
+```{r}
+calculate_g_stats <- function(g){
+  metrics <- strength(g, v=V(g))
+  metrics <- data.frame(metrics)
+  metrics <- cbind(values_name = rownames(metrics), metrics)
+  rownames(metrics) <- 1:nrow(metrics)
+  metrics$closeness <- closeness(g, v=V(g))(g, v=V(g))
+}
+```
+
+
+Plotting function: 
+
+
+```{r}
+plot_graph <- function(g){
+  isol <-  which(degree(g)==0)
+  g_wi <-  delete.vertices(g, isol)
+  ggraph(g_wi, layout = 'graphopt')+
+    geom_node_point(size=0.4)+
+    geom_edge_link(alpha=0.1)+
+    theme_void()+
+    # geom_node_text(aes(label = name), size=2, color="blue", repel=T)+
+    coord_fixed()
+}
+```
+
+
+Read the distance matrix build for each name in the database:
+
+```{r}
+distance <- read.csv('dist_matrix_Nom.csv', row.names = 'Nom')
+g_names <- build_graph(dist_m = distance)
+```
+
+
+## 2.2. Strength
+
+
+```{r}
+resl <- strength(g_names, v=V(g_names))
+# res_d$res <- res_d$res / deg$degree.g_t.
+resl <- data.frame(resl)
+resl <- cbind(city = rownames(resl), resl)
+rownames(resl) <- 1:nrow(resl)
+
+ggplot(data=resl[resl$resl > 4500,], aes(y=reorder(city, resl), x=resl))+
+  geom_bar(stat="identity")+
+  theme_bw()+
+  theme(axis.title.y=element_blank())+
+  labs(x='Strength', fill='Family')
+```
+
+```{r}
+ggplot(data=resl, aes(x=reorder(city, resl), y=resl))+
+  geom_point(stat="identity")+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  labs(y='Strength')
+```
+
+
+
+```{r}
+distance <- read.csv('dist_matrix_Ville.csv', row.names = 'Ville')
+# distance[distance < 5] <- 0
+g <- graph.adjacency(data.matrix(distance), mode = "undirected", diag = FALSE, weighted = T) 
+
+# isol <-  which(degree(g)==0)
+# g_wi <-  delete.vertices(g, isol)
+# ggraph(g_wi, layout = 'graphopt')+
+#   geom_node_point(size=0.4)+
+#   geom_edge_link(alpha=0.1)+
+#   theme_void()+
+#   geom_node_text(aes(label = name), size=2, color="blue", repel=T)+
+#   coord_fixed()+
+#   ggsave('graph_city.pdf', width = 10, height = 10, dpi=300)
+```
+`
+
+```{r}
+resl <- strength(g, v=V(g), loops=TRUE)
+# res_d$res <- res_d$res / deg$degree.g_t.
+resl <- data.frame(resl)
+resl <- cbind(city = rownames(resl), resl)
+rownames(resl) <- 1:nrow(resl)
+
+ggplot(data=resl[resl$resl > 2047,], aes(y=reorder(city, resl), x=resl))+
+  geom_bar(stat="identity")+
+  theme_bw()+
+  theme(axis.title.y=element_blank())+
+  labs(x='Strength', fill='Family')
+```
+
+
+
+```{r}
+resl <- closeness(g, v=V(g))
+# res_d$res <- res_d$res / deg$degree.g_t.
+resl <- data.frame(resl)
+resl <- cbind(city = rownames(resl), resl)
+rownames(resl) <- 1:nrow(resl)
+
+resl$centr <- strength(g, v=V(g))
+# resl$resl_i <- 1/resl$resl
+
+merged <- merge(x = resl, y = coords, by = "city")
+
+merged <- merged[!is.na(merged$resl),]
+merged <- merged[!duplicated(merged$city),]
+```
+
+```{r}
+merged
+```
+
+
+
+```{r}
+ggplot(merged)+
+  geom_voronoi(aes(Lat, Long, fill=resl), show.legend = FALSE)+
+  scale_fill_continuous(high = "#F0FBEF", low = "#1F6218")+
+  geom_point(data=merged[merged$resl < 	0.0006004510,], aes(Lat, Long, size=centr), show.legend = FALSE, color='#FE5F00', alpha=0.4, box.padding=0.1)+
+  theme_void()+
+  labs(fill='Closeness')+
+  geom_text_repel(data=merged[merged$resl <	0.0006004510,],
+            aes(Lat, Long, label=city), color='#000100')+
+  coord_fixed(ratio = 1.15)
+```
+
+
+```{r}
+resl <- betweenness(g, v=V(g))
+resl <- data.frame(resl)
+resl <- cbind(city = rownames(resl), resl)
+rownames(resl) <- 1:nrow(resl)
+
+ggplot(data=resl[resl$resl > 2.41428571,], aes(y=reorder(city, resl), x=resl))+
+  geom_bar(stat="identity")+
+  theme_bw()+
+  theme(axis.title.y=element_blank())+
+  labs(x='Betwennes', fill='Family')
+```
+
+
+
+
+

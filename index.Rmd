@@ -1,5 +1,5 @@
 ---
-title: "DH validation"
+title: "Humanités Numeriques: Validation"
 author: "Alexey Koshevoy"
 date: "11/19/2020"
 output:
@@ -28,7 +28,7 @@ fr <- map_data("world", region = 'France')
 
 # 1. Plots
 
-NB: I did most of the data preparation in Python, therefore you should look for it in this INSERT LINK 
+To categorize each collector, I transformed the data about their collection in  a binary vector of dummy variables. That is, each collector is represented as a binary vector of a length 1007, each digit representing a presence or absence of a particular type of object (Céramique or Curiosités or any other category from the DB). The same operation can be done for each city as well. The notebook with all of the pre-processing can be found [here](https://github.com/alexeykosh/2020-Humanites-Numeriques-Validation/blob/main/distance_matrix.ipynb).
 
 # 1.1. Distributions, long tails, etc.
 
@@ -37,8 +37,8 @@ data_m <- read.csv('data_mod.csv')
 coords <-  read.csv('coords.csv')
 ```
 
+Let's look at the city distribution first:
 
-Let's look at the city distribution first: 
 
 ```{r,message=FALSE}
 data_m %>% 
@@ -52,12 +52,13 @@ data_m %>%
   theme(plot.background = element_rect(fill = "#fffff8"))+
   scale_color_viridis()+
   theme(axis.title.y=element_blank(), 
-        legend.position = "none")
+        legend.position = "none")+
+  labs(x='Number types of objects')
 ```
 
-As it can be seen from the plot below, small cities tent to have < 20 items, therefore let's stick with the first 13. 
+As it can be seen from the plot below, small cities tent to have < 20 types, therefore let's stick with the first 13. 
 
-Let's look at all the cities in the database. However, instead of the city's name, I will be plotting the rank of the city relative to the number of items coming from it:
+Let's look at all the cities in the database. However, instead of the city's name, I will be plotting the rank of the city relative to the number of items types coming from it:
 
 
 
@@ -119,7 +120,7 @@ data_m %>%
   labs(x='Type Rank')
 ```
 
-Once again, there are some 10-15 very frequent type and then a long tail of infrequent ones. Does it follow Zipf's law?
+Once again, there are some 10-15 very frequent types and then a long tail of infrequent ones. Does it follow Zipf's law?
 
 ```{r}
 alpha = 1
@@ -140,7 +141,7 @@ data_m %>%
 
 Not quite, but the notion of a long tail still holds.
 
-Therefore, let's limit ourselves to 13 cities with the biggest numer of items and to 14 most frequent types:
+Therefore, let's limit ourselves to 13 cities with the biggest number of variability in types of objects and to 14 most frequent types:
 
 
 
@@ -175,15 +176,15 @@ data_m[data_m$Type != 'Other',] %>%
   labs(y='Percentage')
 ```
 
-In all of the cities above, the most popular items are usually Paintings and Ceramics. And in all of the 'long tail' of cities the cituation seems to be the same overall (see 'Other' bar-plot). 
+In all of the cities above, the most popular items are usually Paintings and Ceramics. And in all of the 'long tail' of cities the situation seems to be the same overall (see 'Other' bar-plot). 
 
-Let's map the cities with the number of Ceramics in them:
+Let's map the cities with the number of ceramics and paintings in them, as these two types are the most frequent ones:
 
 ```{r, message=FALSE}
 coordss <- merge(x = data_m, y = coords, by.x = "Ville", by.y='city')
 
-coordss[coordss$Objets.collectionnés == 'Céramique',] %>%
-  group_by(Ville) %>%
+coordss[coordss$Objets.collectionnés %in% c('Céramique', 'Tableaux'),] %>%
+  group_by(Ville, Objets.collectionnés) %>%
   summarize(Count=n(), Lat=max(Lat), Long=max(Long)) %>%
   arrange(desc(Count)) %>%
   filter(Count > 3) %>%
@@ -221,12 +222,14 @@ coordss[coordss$Objets.collectionnés == 'Tableaux',] %>%
 
 # 2. Graphs and polygons
 
+The dummy vectors that we have built for each city can be used to build distance matrices in-between cities or collectors. See the [notebook](https://github.com/alexeykosh/2020-Humanites-Numeriques-Validation/blob/main/distance_matrix.ipynb) for the pre-processing procedure.
+
 ## 2.1. Usefull functions
 
-First of all, let's define a function which will build a graph givent the pairwise distance matrix: 
+First of all, let's define a function which will build a graph given the pairwise distance matrix: 
 
 ```{r}
-build_graph <- function(dist_m){
+build_graph <- function(distance){
   distance <- data.frame(distance)
   is.na(distance) <- sapply(distance, is.infinite)
   distance[is.na(distance)] <- 0
@@ -236,20 +239,22 @@ build_graph <- function(dist_m){
 ```
 
 
-Then I will build a function that will take the graph outputted by the previous function and calculate all of the possible metrics on it. 
+Then I will build a function that will take the graph outputted by the previous function and calculate all of the desired graph-based metrics on it. For instance, it can be used to calculate degree centrality. 
 
 ```{r}
 calculate_g_stats <- function(g){
-  metrics <- strength(g, v=V(g))
-  metrics <- data.frame(metrics)
+  strength <- strength(g, v=V(g))
+  metrics <- data.frame(strength)
   metrics <- cbind(values_name = rownames(metrics), metrics)
   rownames(metrics) <- 1:nrow(metrics)
-  metrics$closeness <- closeness(g, v=V(g))(g, v=V(g))
+  metrics$closeness <- closeness(g, v=V(g))
+  metrics$betweenness <- betweenness(g, v=V(g))
+  return(metrics)
 }
 ```
 
 
-Plotting function: 
+And, finally the plotting function: 
 
 
 ```{r}
@@ -260,80 +265,70 @@ plot_graph <- function(g){
     geom_node_point(size=0.4)+
     geom_edge_link(alpha=0.1)+
     theme_void()+
-    # geom_node_text(aes(label = name), size=2, color="blue", repel=T)+
+    geom_node_text(aes(label = name), size=2, color="blue", repel=T)+
+    theme(plot.background = element_rect(fill = "#fffff8"))+
     coord_fixed()
 }
 ```
 
 
+
+## 2.1. Graph of the collectors
+
 Read the distance matrix build for each name in the database:
 
 ```{r}
 distance <- read.csv('dist_matrix_Nom.csv', row.names = 'Nom')
-g_names <- build_graph(dist_m = distance)
+g_names <- build_graph(distance)
 ```
 
 
-## 2.2. Strength
-
+As the graph is very dence, let's look at first 30 collectors: 
 
 ```{r}
-resl <- strength(g_names, v=V(g_names))
-# res_d$res <- res_d$res / deg$degree.g_t.
-resl <- data.frame(resl)
-resl <- cbind(city = rownames(resl), resl)
-rownames(resl) <- 1:nrow(resl)
+plot_graph(build_graph(distance[,1:30][1:30,]))
+```
 
-ggplot(data=resl[resl$resl > 4500,], aes(y=reorder(city, resl), x=resl))+
+
+Overall, it's a fully interconnected graph, it's nearly impossible to deduce anything just by looking at it. 
+
+```{r}
+resl <- calculate_g_stats(g_names)
+```
+
+Let's calculate the strength of each vertex, to deduce which of the of collectors influences others the most. That is, the collector that has the highest combined weight in the graph.
+
+```{r}
+ggplot(data=resl[resl$strength > 4500,], aes(y=reorder(values_name, strength), x=strength))+
   geom_bar(stat="identity")+
-  theme_bw()+
+  theme_minimal()+
   theme(axis.title.y=element_blank())+
-  labs(x='Strength', fill='Family')
+  labs(x='Strength', fill='Family')+
+  theme(plot.background = element_rect(fill = "#fffff8"))
 ```
+
+Let's look at the betweenness centrality for the cities. 
+
 
 ```{r}
-ggplot(data=resl, aes(x=reorder(city, resl), y=resl))+
-  geom_point(stat="identity")+
-  theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())+
-  labs(y='Strength')
+ggplot(data=resl[resl$betweenness > 50,], aes(y=reorder(values_name, betweenness), x=betweenness))+
+  geom_bar(stat="identity")+
+  theme_minimal()+
+  theme(axis.title.y=element_blank())+
+  labs(x='Betweenness', fill='Family')+
+  theme(plot.background = element_rect(fill = "#fffff8"))
 ```
 
 
+## 2.2. Graph of the cities
 
 ```{r}
 distance <- read.csv('dist_matrix_Ville.csv', row.names = 'Ville')
-# distance[distance < 5] <- 0
 g <- graph.adjacency(data.matrix(distance), mode = "undirected", diag = FALSE, weighted = T) 
-
-# isol <-  which(degree(g)==0)
-# g_wi <-  delete.vertices(g, isol)
-# ggraph(g_wi, layout = 'graphopt')+
-#   geom_node_point(size=0.4)+
-#   geom_edge_link(alpha=0.1)+
-#   theme_void()+
-#   geom_node_text(aes(label = name), size=2, color="blue", repel=T)+
-#   coord_fixed()+
-#   ggsave('graph_city.pdf', width = 10, height = 10, dpi=300)
-```
-`
-
-```{r}
-resl <- strength(g, v=V(g), loops=TRUE)
-# res_d$res <- res_d$res / deg$degree.g_t.
-resl <- data.frame(resl)
-resl <- cbind(city = rownames(resl), resl)
-rownames(resl) <- 1:nrow(resl)
-
-ggplot(data=resl[resl$resl > 2047,], aes(y=reorder(city, resl), x=resl))+
-  geom_bar(stat="identity")+
-  theme_bw()+
-  theme(axis.title.y=element_blank())+
-  labs(x='Strength', fill='Family')
 ```
 
 
+Additionally, we can build the map using the closeness centrality measure for each city. That is, the number of steps needed to asses any city from a given city. As the weights in our graph represent similarity in terms of collected items, it may highlight the most influential cities in the database. 
 
 ```{r}
 resl <- closeness(g, v=V(g))
@@ -351,37 +346,23 @@ merged <- merged[!is.na(merged$resl),]
 merged <- merged[!duplicated(merged$city),]
 ```
 
-```{r}
-merged
-```
-
+This can be visualized using this Voronoi diagram, where the cities are partitioned based on the values of the closeness centrality. Additionally, each colored dot represents the weighted vertex degree, to highlight the cities that are the most influential overall. The color of the Voronoi polygons represents the closeness centrality: 
 
 
 ```{r}
 ggplot(merged)+
   geom_voronoi(aes(Lat, Long, fill=resl), show.legend = FALSE)+
   scale_fill_continuous(high = "#F0FBEF", low = "#1F6218")+
-  geom_point(data=merged[merged$resl < 	0.0006004510,], aes(Lat, Long, size=centr), show.legend = FALSE, color='#FE5F00', alpha=0.4, box.padding=0.1)+
+  geom_point(data=merged[merged$resl < 	0.0006004510,], aes(Lat, Long, size=centr), show.legend = FALSE, color='#FE5F00', alpha=0.4)+
   theme_void()+
   labs(fill='Closeness')+
   geom_text_repel(data=merged[merged$resl <	0.0006004510,],
             aes(Lat, Long, label=city), color='#000100')+
-  coord_fixed(ratio = 1.15)
+  coord_fixed(ratio = 1.15)+
+  theme(plot.background = element_rect(fill = "#fffff8"))
 ```
 
 
-```{r}
-resl <- betweenness(g, v=V(g))
-resl <- data.frame(resl)
-resl <- cbind(city = rownames(resl), resl)
-rownames(resl) <- 1:nrow(resl)
-
-ggplot(data=resl[resl$resl > 2.41428571,], aes(y=reorder(city, resl), x=resl))+
-  geom_bar(stat="identity")+
-  theme_bw()+
-  theme(axis.title.y=element_blank())+
-  labs(x='Betwennes', fill='Family')
-```
 
 
 
